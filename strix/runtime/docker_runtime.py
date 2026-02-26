@@ -9,6 +9,7 @@ from docker.errors import DockerException, ImageNotFound, NotFound
 from docker.models.containers import Container
 from requests.exceptions import ConnectionError as RequestsConnectionError
 from requests.exceptions import Timeout as RequestsTimeout
+from rich.console import Console
 
 from strix.config import Config
 
@@ -20,6 +21,7 @@ HOST_GATEWAY_HOSTNAME = "host.docker.internal"
 DOCKER_TIMEOUT = 60
 CONTAINER_TOOL_SERVER_PORT = 48081
 CONTAINER_CAIDO_PORT = 48080
+CONSOLE = Console(stderr=True)
 
 
 class DockerRuntime(AbstractRuntime):
@@ -34,6 +36,9 @@ class DockerRuntime(AbstractRuntime):
 
         self._scan_container: Container | None = None
         self._tool_server_token: str | None = None
+
+    def _console_output(self, message: str) -> None:
+        CONSOLE.print(f"[docker_runtime] {message}", markup=False)
 
     def _get_scan_id(self, agent_id: str) -> str:
         try:
@@ -80,6 +85,7 @@ class DockerRuntime(AbstractRuntime):
     def _wait_for_tool_server(self, max_retries: int = 30, timeout: int = 5) -> None:
         container_ip = self._get_container_ip(self._scan_container)
         health_url = f"http://{container_ip}:{CONTAINER_TOOL_SERVER_PORT}/health"
+        self._console_output(f"Waiting for tool server at {health_url}")
 
         time.sleep(5)
 
@@ -90,6 +96,7 @@ class DockerRuntime(AbstractRuntime):
                     if response.status_code == 200:
                         data = response.json()
                         if data.get("status") == "healthy":
+                            self._console_output("Tool server is healthy")
                             return
             except (httpx.ConnectError, httpx.TimeoutException, httpx.RequestError):
                 pass
@@ -112,6 +119,9 @@ class DockerRuntime(AbstractRuntime):
         last_error: Exception | None = None
         for attempt in range(max_retries + 1):
             try:
+                self._console_output(
+                    f"Creating container {container_name} (attempt {attempt + 1}/{max_retries + 1})"
+                )
                 with contextlib.suppress(NotFound):
                     existing = self.client.containers.get(container_name)
                     with contextlib.suppress(Exception):
@@ -147,6 +157,7 @@ class DockerRuntime(AbstractRuntime):
             except (DockerException, RequestsConnectionError, RequestsTimeout) as e:
                 last_error = e
                 if attempt < max_retries:
+                    self._console_output(f"Container creation failed, retrying: {e}")
                     self._tool_server_token = None
                     time.sleep(2**attempt)
             else:
@@ -159,6 +170,7 @@ class DockerRuntime(AbstractRuntime):
 
     def _get_or_create_container(self, scan_id: str) -> Container:
         container_name = f"strix-scan-{scan_id}"
+        self._console_output(f"Resolving container for scan {scan_id}")
 
         if self._scan_container:
             try:
@@ -200,6 +212,7 @@ class DockerRuntime(AbstractRuntime):
         except DockerException:
             pass
 
+        self._console_output(f"No reusable container found. Creating {container_name}")
         return self._create_container(scan_id)
 
     def _copy_local_directory_to_container(
@@ -287,6 +300,7 @@ class DockerRuntime(AbstractRuntime):
 
     async def get_sandbox_url(self, container_id: str, port: int) -> str:
         try:
+            self._console_output(f"Resolving sandbox URL for container {container_id}:{port}")
             container = self.client.containers.get(container_id)
             container_ip = self._get_container_ip(container)
             return f"http://{container_ip}:{port}"

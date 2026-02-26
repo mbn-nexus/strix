@@ -106,8 +106,13 @@ class TestGetSandboxUrl:
         }
         mock_docker_client.containers.get.return_value = container
 
-        url = await runtime.get_sandbox_url("container-id-123", 48081)
+        with patch.object(runtime, "_console_output") as mock_console_output:
+            url = await runtime.get_sandbox_url("container-id-123", 48081)
+
         assert url == "http://172.17.0.2:48081"
+        mock_console_output.assert_called_once_with(
+            "Resolving sandbox URL for container container-id-123:48081"
+        )
 
     @pytest.mark.asyncio
     async def test_raises_when_container_not_found(self, runtime, mock_docker_client):
@@ -165,3 +170,22 @@ class TestNoPortPublishing:
     def test_no_port_instance_variables(self, runtime):
         assert not hasattr(runtime, "_tool_server_port")
         assert not hasattr(runtime, "_caido_port")
+
+
+class TestContainerResolutionOutput:
+    def test_logs_when_creating_new_container(self, runtime, mock_docker_client):
+        mock_docker_client.containers.get.side_effect = NotFound("not found")
+        mock_docker_client.containers.list.return_value = []
+        created_container = MagicMock()
+
+        with (
+            patch.object(runtime, "_create_container", return_value=created_container),
+            patch.object(runtime, "_console_output") as mock_console_output,
+        ):
+            container = runtime._get_or_create_container("scan-123")
+
+        assert container is created_container
+        mock_console_output.assert_any_call("Resolving container for scan scan-123")
+        mock_console_output.assert_any_call(
+            "No reusable container found. Creating strix-scan-scan-123"
+        )
