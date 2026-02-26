@@ -27,7 +27,7 @@ CONSOLE = Console()
 class DockerRuntime(AbstractRuntime):
     def __init__(self) -> None:
         try:
-            _console_output("Initializing Docker client")
+            CONSOLE.print("Initializing Docker client")
             self.client = docker.from_env(timeout=DOCKER_TIMEOUT)
         except (DockerException, RequestsConnectionError, RequestsTimeout) as e:
             raise SandboxInitializationError(
