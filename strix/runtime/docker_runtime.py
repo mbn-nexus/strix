@@ -21,7 +21,7 @@ HOST_GATEWAY_HOSTNAME = "host.docker.internal"
 DOCKER_TIMEOUT = 60
 CONTAINER_TOOL_SERVER_PORT = 48081
 CONTAINER_CAIDO_PORT = 48080
-CONSOLE = Console(stderr=True)
+CONSOLE = Console(stderr=False)
 
 
 class DockerRuntime(AbstractRuntime):
