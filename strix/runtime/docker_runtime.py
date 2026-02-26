@@ -1,10 +1,7 @@
 import contextlib
-import os
 import secrets
-import socket
 import time
 from pathlib import Path
-from typing import cast
 
 import docker
 import httpx
@@ -36,14 +33,7 @@ class DockerRuntime(AbstractRuntime):
             ) from e
 
         self._scan_container: Container | None = None
-        self._tool_server_port: int | None = None
         self._tool_server_token: str | None = None
-        self._caido_port: int | None = None
-
-    def _find_available_port(self) -> int:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.bind(("", 0))
-            return cast("int", s.getsockname()[1])
 
     def _get_scan_id(self, agent_id: str) -> str:
         try:
@@ -69,24 +59,27 @@ class DockerRuntime(AbstractRuntime):
             else:
                 return
 
+    def _get_container_ip(self, container: Container) -> str:
+        container.reload()
+        networks = container.attrs.get("NetworkSettings", {}).get("Networks", {})
+        for network in networks.values():
+            ip = network.get("IPAddress")
+            if ip:
+                return ip
+        raise SandboxInitializationError(
+            "Container IP not found",
+            "Could not determine container IP address from Docker network settings.",
+        )
+
     def _recover_container_state(self, container: Container) -> None:
         for env_var in container.attrs["Config"]["Env"]:
             if env_var.startswith("TOOL_SERVER_TOKEN="):
                 self._tool_server_token = env_var.split("=", 1)[1]
                 break
 
-        port_bindings = container.attrs.get("NetworkSettings", {}).get("Ports", {})
-        port_key = f"{CONTAINER_TOOL_SERVER_PORT}/tcp"
-        if port_bindings.get(port_key):
-            self._tool_server_port = int(port_bindings[port_key][0]["HostPort"])
-
-        caido_port_key = f"{CONTAINER_CAIDO_PORT}/tcp"
-        if port_bindings.get(caido_port_key):
-            self._caido_port = int(port_bindings[caido_port_key][0]["HostPort"])
-
     def _wait_for_tool_server(self, max_retries: int = 30, timeout: int = 5) -> None:
-        host = self._resolve_docker_host()
-        health_url = f"http://{host}:{self._tool_server_port}/health"
+        container_ip = self._get_container_ip(self._scan_container)
+        health_url = f"http://{container_ip}:{CONTAINER_TOOL_SERVER_PORT}/health"
 
         time.sleep(5)
 
@@ -126,8 +119,6 @@ class DockerRuntime(AbstractRuntime):
                     existing.remove(force=True)
                     time.sleep(1)
 
-                self._tool_server_port = self._find_available_port()
-                self._caido_port = self._find_available_port()
                 self._tool_server_token = secrets.token_urlsafe(32)
                 execution_timeout = Config.get("strix_sandbox_execution_timeout") or "120"
 
@@ -137,10 +128,6 @@ class DockerRuntime(AbstractRuntime):
                     detach=True,
                     name=container_name,
                     hostname=container_name,
-                    ports={
-                        f"{CONTAINER_TOOL_SERVER_PORT}/tcp": self._tool_server_port,
-                        f"{CONTAINER_CAIDO_PORT}/tcp": self._caido_port,
-                    },
                     cap_add=["NET_ADMIN", "NET_RAW"],
                     labels={"strix-scan-id": scan_id},
                     environment={
@@ -160,9 +147,7 @@ class DockerRuntime(AbstractRuntime):
             except (DockerException, RequestsConnectionError, RequestsTimeout) as e:
                 last_error = e
                 if attempt < max_retries:
-                    self._tool_server_port = None
                     self._tool_server_token = None
-                    self._caido_port = None
                     time.sleep(2**attempt)
             else:
                 return container
@@ -182,9 +167,7 @@ class DockerRuntime(AbstractRuntime):
                     return self._scan_container
             except NotFound:
                 self._scan_container = None
-                self._tool_server_port = None
                 self._tool_server_token = None
-                self._caido_port = None
 
         try:
             container = self.client.containers.get(container_name)
@@ -272,11 +255,11 @@ class DockerRuntime(AbstractRuntime):
             raise RuntimeError("Docker container ID is unexpectedly None")
 
         token = existing_token or self._tool_server_token
-        if self._tool_server_port is None or self._caido_port is None or token is None:
+        if token is None:
             raise RuntimeError("Tool server not initialized")
 
-        host = self._resolve_docker_host()
-        api_url = f"http://{host}:{self._tool_server_port}"
+        container_ip = self._get_container_ip(container)
+        api_url = f"http://{container_ip}:{CONTAINER_TOOL_SERVER_PORT}"
 
         await self._register_agent(api_url, agent_id, token)
 
@@ -284,8 +267,8 @@ class DockerRuntime(AbstractRuntime):
             "workspace_id": container.id,
             "api_url": api_url,
             "auth_token": token,
-            "tool_server_port": self._tool_server_port,
-            "caido_port": self._caido_port,
+            "tool_server_port": CONTAINER_TOOL_SERVER_PORT,
+            "caido_port": CONTAINER_CAIDO_PORT,
             "agent_id": agent_id,
         }
 
@@ -304,20 +287,11 @@ class DockerRuntime(AbstractRuntime):
 
     async def get_sandbox_url(self, container_id: str, port: int) -> str:
         try:
-            self.client.containers.get(container_id)
-            return f"http://{self._resolve_docker_host()}:{port}"
+            container = self.client.containers.get(container_id)
+            container_ip = self._get_container_ip(container)
+            return f"http://{container_ip}:{port}"
         except NotFound:
             raise ValueError(f"Container {container_id} not found.") from None
-
-    def _resolve_docker_host(self) -> str:
-        docker_host = os.getenv("DOCKER_HOST", "")
-        if docker_host:
-            from urllib.parse import urlparse
-
-            parsed = urlparse(docker_host)
-            if parsed.scheme in ("tcp", "http", "https") and parsed.hostname:
-                return parsed.hostname
-        return "127.0.0.1"
 
     async def destroy_sandbox(self, container_id: str) -> None:
         try:
@@ -325,9 +299,7 @@ class DockerRuntime(AbstractRuntime):
             container.stop()
             container.remove()
             self._scan_container = None
-            self._tool_server_port = None
             self._tool_server_token = None
-            self._caido_port = None
         except (NotFound, DockerException):
             pass
 
@@ -335,9 +307,7 @@ class DockerRuntime(AbstractRuntime):
         if self._scan_container is not None:
             container_name = self._scan_container.name
             self._scan_container = None
-            self._tool_server_port = None
             self._tool_server_token = None
-            self._caido_port = None
 
             if container_name is None:
                 return
