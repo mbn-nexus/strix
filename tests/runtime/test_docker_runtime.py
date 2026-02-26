@@ -80,6 +80,18 @@ class TestGetContainerIp:
         with pytest.raises(SandboxInitializationError, match="Container IP not found"):
             runtime._get_container_ip(container)
 
+    def test_calls_reload_before_accessing_attrs(self, runtime):
+        container = MagicMock()
+        container.attrs = {
+            "NetworkSettings": {
+                "Networks": {
+                    "bridge": {"IPAddress": "172.17.0.2"},
+                }
+            }
+        }
+        runtime._get_container_ip(container)
+        container.reload.assert_called_once()
+
 
 class TestGetSandboxUrl:
     @pytest.mark.asyncio
