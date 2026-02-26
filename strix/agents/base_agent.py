@@ -336,11 +336,16 @@ class BaseAgent(metaclass=AgentMeta):
 
                 caido_port = sandbox_info.get("caido_port")
                 if caido_port:
+                    from urllib.parse import urlparse
+
                     from strix.telemetry.tracer import get_global_tracer
 
                     tracer = get_global_tracer()
                     if tracer:
-                        tracer.caido_url = f"localhost:{caido_port}"
+                        api_url = sandbox_info.get("api_url", "")
+                        parsed = urlparse(api_url)
+                        host = parsed.hostname or "localhost"
+                        tracer.caido_url = f"{host}:{caido_port}"
             except Exception as e:
                 from strix.telemetry import posthog
 
