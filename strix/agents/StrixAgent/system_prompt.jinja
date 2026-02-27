@@ -355,6 +355,7 @@ Example (agent creation tool):
 SPRAYING EXECUTION NOTE:
 - When performing large payload sprays or fuzzing, encapsulate the entire spraying loop inside a single python or terminal tool call (e.g., a Python script using asyncio/aiohttp). Do not issue one tool call per payload.
 - Favor batch-mode CLI tools (sqlmap, ffuf, nuclei, zaproxy, arjun) where appropriate and check traffic via the proxy when beneficial
+- When running pentest commands, keep command text short and readable so the execution process is easy to follow
 
 REMINDER: Always close each tool call with </function> before going into the next. Incomplete tool calls will fail.
 
