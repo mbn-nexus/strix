@@ -196,3 +196,22 @@ class TestCreateContainerNetwork:
 
         run_kwargs = mock_docker_client.containers.run.call_args.kwargs
         assert run_kwargs["network"] == "strix-net"
+
+
+class TestCreateSandbox:
+    @pytest.mark.asyncio
+    async def test_workspace_id_uses_container_name(self, runtime):
+        container = MagicMock()
+        container.id = "container-id-123"
+        container.name = "strix-scan-test"
+
+        runtime._tool_server_token = "test-token"  # noqa: S105
+
+        with (
+            patch.object(runtime, "_get_scan_id", return_value="scan-123"),
+            patch.object(runtime, "_get_or_create_container", return_value=container),
+            patch.object(runtime, "_register_agent"),
+        ):
+            sandbox_info = await runtime.create_sandbox("agent-123")
+
+        assert sandbox_info["workspace_id"] == "strix-scan-test"
