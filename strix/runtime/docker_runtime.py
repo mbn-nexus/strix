@@ -299,7 +299,7 @@ class DockerRuntime(AbstractRuntime):
         await self._register_agent(api_url, agent_id, token)
 
         return {
-            "workspace_id": container.id,
+            "workspace_id": container.name,
             "api_url": api_url,
             "auth_token": token,
             "tool_server_port": CONTAINER_TOOL_SERVER_PORT,
