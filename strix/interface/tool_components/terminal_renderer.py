@@ -13,6 +13,7 @@ from .registry import register_tool_renderer
 
 MAX_OUTPUT_LINES = 50
 MAX_LINE_LENGTH = 200
+MAX_COMMAND_PREVIEW_LENGTH = 100
 
 STRIP_PATTERNS = [
     (
@@ -308,4 +309,7 @@ class TerminalRenderer(BaseToolRenderer):
 
     @classmethod
     def _format_command(cls, command: str) -> Text:
-        return cls._highlight_bash(command)
+        compact_command = " ".join(command.split())
+        if len(compact_command) > MAX_COMMAND_PREVIEW_LENGTH:
+            compact_command = compact_command[: MAX_COMMAND_PREVIEW_LENGTH - 3].rstrip() + "..."
+        return cls._highlight_bash(compact_command)
