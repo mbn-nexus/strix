@@ -2,6 +2,7 @@
 set -e
 
 CAIDO_PORT=48080
+TOOL_SERVER_PORT=5000
 CAIDO_LOG="/tmp/caido_startup.log"
 
 if [ ! -f /app/certs/ca.p12 ]; then
@@ -163,7 +164,7 @@ sudo -E -u pentester \
   poetry run python -m strix.runtime.tool_server \
   --token="$TOOL_SERVER_TOKEN" \
   --host=0.0.0.0 \
-  --port="$TOOL_SERVER_PORT" \
+  --port=5000 \
   --timeout="$TOOL_SERVER_TIMEOUT" > "$TOOL_SERVER_LOG" 2>&1 &
 
 for i in {1..10}; do

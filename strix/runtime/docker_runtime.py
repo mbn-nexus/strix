@@ -1,4 +1,5 @@
 import contextlib
+import os
 import secrets
 import time
 from pathlib import Path
@@ -19,7 +20,7 @@ from .runtime import AbstractRuntime, SandboxInfo
 
 HOST_GATEWAY_HOSTNAME = "host.docker.internal"
 DOCKER_TIMEOUT = 60
-CONTAINER_TOOL_SERVER_PORT = 48081
+CONTAINER_TOOL_SERVER_PORT = 5000
 CONTAINER_CAIDO_PORT = 48080
 CONSOLE = Console()
 
@@ -84,8 +85,12 @@ class DockerRuntime(AbstractRuntime):
                 break
 
     def _wait_for_tool_server(self, max_retries: int = 30, timeout: int = 5) -> None:
-        container_ip = self._get_container_ip(self._scan_container)
-        health_url = f"http://{container_ip}:{CONTAINER_TOOL_SERVER_PORT}/health"
+        if self._scan_container is None or self._scan_container.name is None:
+            raise SandboxInitializationError(
+                "Container name not found",
+                "Could not determine container name for tool server health checks.",
+            )
+        health_url = f"http://{self._scan_container.name}:{CONTAINER_TOOL_SERVER_PORT}/health"
         self._console_output(f"Waiting for tool server at {health_url}")
 
         time.sleep(5)
@@ -132,24 +137,39 @@ class DockerRuntime(AbstractRuntime):
 
                 self._tool_server_token = secrets.token_urlsafe(32)
                 execution_timeout = Config.get("strix_sandbox_execution_timeout") or "120"
+                current_container_id = os.getenv("HOSTNAME", "")
+                network_name = None
+                if current_container_id:
+                    with contextlib.suppress(DockerException, NotFound):
+                        current_container = self.client.containers.get(current_container_id)
+                        networks = (
+                            current_container.attrs.get("NetworkSettings", {}).get("Networks", {})
+                        )
+                        network_name = next(iter(networks), None)
 
-                container = self.client.containers.run(
-                    image_name,
-                    command="sleep infinity",
-                    detach=True,
-                    name=container_name,
-                    hostname=container_name,
-                    cap_add=["NET_ADMIN", "NET_RAW"],
-                    labels={"strix-scan-id": scan_id},
-                    environment={
+                run_kwargs = {
+                    "image": image_name,
+                    "command": "sleep infinity",
+                    "detach": True,
+                    "name": container_name,
+                    "hostname": container_name,
+                    "cap_add": ["NET_ADMIN", "NET_RAW"],
+                    "labels": {"strix-scan-id": scan_id},
+                    "environment": {
                         "PYTHONUNBUFFERED": "1",
                         "TOOL_SERVER_PORT": str(CONTAINER_TOOL_SERVER_PORT),
                         "TOOL_SERVER_TOKEN": self._tool_server_token,
                         "STRIX_SANDBOX_EXECUTION_TIMEOUT": str(execution_timeout),
                         "HOST_GATEWAY": HOST_GATEWAY_HOSTNAME,
                     },
-                    extra_hosts={HOST_GATEWAY_HOSTNAME: "host-gateway"},
-                    tty=True,
+                    "extra_hosts": {HOST_GATEWAY_HOSTNAME: "host-gateway"},
+                    "tty": True,
+                }
+                if network_name:
+                    run_kwargs["network"] = network_name
+
+                container = self.client.containers.run(
+                    **run_kwargs,
                 )
 
                 self._scan_container = container
@@ -272,8 +292,9 @@ class DockerRuntime(AbstractRuntime):
         if token is None:
             raise RuntimeError("Tool server not initialized")
 
-        container_ip = self._get_container_ip(container)
-        api_url = f"http://{container_ip}:{CONTAINER_TOOL_SERVER_PORT}"
+        if container.name is None:
+            raise RuntimeError("Docker container name is unexpectedly None")
+        api_url = f"http://{container.name}:{CONTAINER_TOOL_SERVER_PORT}"
 
         await self._register_agent(api_url, agent_id, token)
 
@@ -303,10 +324,11 @@ class DockerRuntime(AbstractRuntime):
         try:
             self._console_output(f"Resolving sandbox URL for container {container_id}:{port}")
             container = self.client.containers.get(container_id)
-            container_ip = self._get_container_ip(container)
-            return f"http://{container_ip}:{port}"
         except NotFound:
             raise ValueError(f"Container {container_id} not found.") from None
+        if container.name is None:
+            raise ValueError(f"Container {container_id} has no name.")
+        return f"http://{container.name}:{port}"
 
     async def destroy_sandbox(self, container_id: str) -> None:
         try:
