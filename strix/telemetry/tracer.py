@@ -74,6 +74,19 @@ class Tracer:
 
         return self._run_dir
 
+    def _get_logs_dir(self) -> Path:
+        logs_dir = Path.cwd() / "strix_runs" / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        return logs_dir
+
+    def _append_executed_command(self, command_text: str) -> None:
+        try:
+            commands_log = self._get_logs_dir() / "executed_commands.log"
+            with commands_log.open("a", encoding="utf-8") as f:
+                f.write(f"{command_text}\n")
+        except OSError:
+            logger.exception("Failed to append executed command to logs")
+
     def add_vulnerability_report(  # noqa: PLR0912
         self,
         title: str,
@@ -237,6 +250,10 @@ class Tracer:
         }
 
         self.tool_executions[execution_id] = execution_data
+
+        command_text = args.get("command")
+        if isinstance(command_text, str) and command_text.strip():
+            self._append_executed_command(command_text)
 
         if agent_id in self.agents:
             self.agents[agent_id]["tool_executions"].append(execution_id)
