@@ -95,23 +95,17 @@ class TestGetContainerIp:
 
 class TestGetSandboxUrl:
     @pytest.mark.asyncio
-    async def test_returns_url_with_container_ip(self, runtime, mock_docker_client):
+    async def test_returns_url_with_container_name(self, runtime, mock_docker_client):
         container = MagicMock()
-        container.attrs = {
-            "NetworkSettings": {
-                "Networks": {
-                    "bridge": {"IPAddress": "172.17.0.2"},
-                }
-            }
-        }
+        container.name = "strix-scan-test"
         mock_docker_client.containers.get.return_value = container
 
         with patch.object(runtime, "_console_output") as mock_console_output:
-            url = await runtime.get_sandbox_url("container-id-123", 48081)
+            url = await runtime.get_sandbox_url("container-id-123", 5000)
 
-        assert url == "http://172.17.0.2:48081"
+        assert url == "http://strix-scan-test:5000"
         mock_console_output.assert_called_once_with(
-            "Resolving sandbox URL for container container-id-123:48081"
+            "Resolving sandbox URL for container container-id-123:5000"
         )
 
     @pytest.mark.asyncio
@@ -124,17 +118,11 @@ class TestGetSandboxUrl:
     @pytest.mark.asyncio
     async def test_uses_internal_port(self, runtime, mock_docker_client):
         container = MagicMock()
-        container.attrs = {
-            "NetworkSettings": {
-                "Networks": {
-                    "bridge": {"IPAddress": "172.17.0.5"},
-                }
-            }
-        }
+        container.name = "strix-scan-test"
         mock_docker_client.containers.get.return_value = container
 
         url = await runtime.get_sandbox_url("container-id", 48080)
-        assert url == "http://172.17.0.5:48080"
+        assert url == "http://strix-scan-test:48080"
 
 
 class TestRecoverContainerState:
@@ -145,12 +133,12 @@ class TestRecoverContainerState:
                 "Env": [
                     "PYTHONUNBUFFERED=1",
                     "TOOL_SERVER_TOKEN=my-secret-token",
-                    "TOOL_SERVER_PORT=48081",
+                    "TOOL_SERVER_PORT=5000",
                 ]
             },
         }
         runtime._recover_container_state(container)
-        assert runtime._tool_server_token == "my-secret-token"
+        assert runtime._tool_server_token == "my-secret-token"  # noqa: S105
 
     def test_handles_missing_token(self, runtime):
         container = MagicMock()
@@ -158,7 +146,7 @@ class TestRecoverContainerState:
             "Config": {
                 "Env": [
                     "PYTHONUNBUFFERED=1",
-                    "TOOL_SERVER_PORT=48081",
+                    "TOOL_SERVER_PORT=5000",
                 ]
             },
         }
@@ -189,3 +177,22 @@ class TestContainerResolutionOutput:
         mock_console_output.assert_any_call(
             "No reusable container found. Creating strix-scan-scan-123"
         )
+
+
+class TestCreateContainerNetwork:
+    def test_uses_current_container_network(self, runtime, mock_docker_client):
+        current_container = MagicMock()
+        current_container.attrs = {"NetworkSettings": {"Networks": {"strix-net": {}}}}
+
+        created_container = MagicMock()
+        mock_docker_client.containers.get.side_effect = [NotFound("not found"), current_container]
+        mock_docker_client.containers.run.return_value = created_container
+
+        with (
+            patch("strix.runtime.docker_runtime.os.getenv", return_value="strix-main"),
+            patch.object(runtime, "_wait_for_tool_server"),
+        ):
+            runtime._create_container("scan-123")
+
+        run_kwargs = mock_docker_client.containers.run.call_args.kwargs
+        assert run_kwargs["network"] == "strix-net"
